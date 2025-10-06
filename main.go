@@ -8,6 +8,18 @@ import (
 	"golang.org/x/exp/trace"
 )
 
+func RangeString(e trace.Event) string {
+	if k := e.Kind(); k == trace.EventRangeBegin || k == trace.EventRangeEnd {
+		r := e.Range()
+		ss := "[Range Start]"
+		if k == trace.EventRangeEnd {
+			ss = "[Range End]"
+		}
+		return fmt.Sprintf("%v %s %v: %v", e.Time(), ss, r.Scope, r.Name)
+	}
+	panic("unreachable")
+}
+
 func StateTransitionString(e trace.Event) string {
 	if e.Kind() == trace.EventStateTransition {
 		switch e.StateTransition().Resource.Kind {
@@ -33,8 +45,8 @@ func main() {
 	tr, _ := trace.NewReader(file)
 
 	ptrace := perfetto.Trace{TID: 42}
-	p := ptrace.AddProcess(1, "Process 0")
-	_ = p
+	p := ptrace.AddProcess(0, "Process 0")
+	globalT := ptrace.AddThread(0, 1, "Global Thread")
 
 	running := make(map[int64]bool)
 
@@ -42,14 +54,28 @@ func main() {
 	for err == nil {
 		e, err = tr.ReadEvent()
 		switch e.Kind() {
-		case trace.EventMetric:
-			fmt.Println("metric:", e.Metric())
+		// case trace.EventMetric:
+		// 	fmt.Println("metric:", e.Metric())
 		case trace.EventRangeBegin, trace.EventRangeEnd:
-			fmt.Println("range:", e.Range())
+			fmt.Println(RangeString(e))
+			r := e.Range()
+			if k := e.Kind(); k == trace.EventRangeBegin {
+				if r.Scope.Kind == trace.ResourceNone {
+					ptrace.AddEvent(globalT.StartSlice(uint64(e.Time()), r.Name))
+				} else {
+					ptrace.AddEvent(p.StartSlice(uint64(e.Time()), r.Name))
+				}
+			} else {
+				if r.Scope.Kind == trace.ResourceNone {
+					ptrace.AddEvent(globalT.EndSlice(uint64(e.Time())))
+				} else {
+					ptrace.AddEvent(p.EndSlice(uint64(e.Time())))
+				}
+			}
 		case trace.EventTaskBegin, trace.EventTaskEnd:
-			fmt.Println("task:", e.Task())
+			//fmt.Println("task:", e.Task())
 		case trace.EventRegionBegin, trace.EventRegionEnd:
-			fmt.Println("region:", e.Region())
+			//fmt.Println("region:", e.Region())
 		case trace.EventStateTransition:
 			fmt.Println(StateTransitionString(e))
 			if e.StateTransition().Resource.Kind == trace.ResourceGoroutine {
