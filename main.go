@@ -28,6 +28,14 @@ func main() {
 	for err == nil {
 		e, err = tr.ReadEvent()
 		fmt.Println("|", e)
+
+		// Extract the thread, and add a new Thread to the trace if we
+		// never saw this one
+		t := e.Thread()
+		if _, ok := threads[t]; !ok {
+			threads[t] = ptrace.AddThread(0, int32(t), "Thread")
+		}
+
 		switch e.Kind() {
 		case trace.EventMetric:
 			name := e.Metric().Name
@@ -37,10 +45,6 @@ func main() {
 			ptrace.AddEvent(metrics[name].NewValue(uint64(e.Time()), int64(e.Metric().Value.Uint64())))
 		case trace.EventRangeBegin, trace.EventRangeEnd:
 			r := e.Range()
-			t := e.Thread()
-			if _, ok := threads[t]; !ok {
-				threads[t] = ptrace.AddThread(0, int32(t), "Thread")
-			}
 			if k := e.Kind(); k == trace.EventRangeBegin {
 				if r.Scope.Kind == trace.ResourceNone {
 					ptrace.AddEvent(p.StartSlice(uint64(e.Time()), r.Name))
@@ -57,13 +61,6 @@ func main() {
 		case trace.EventStateTransition:
 			if e.StateTransition().Resource.Kind != trace.ResourceGoroutine {
 				continue
-			}
-
-			// first, extract the thread and add a new thread to the
-			// trace if we never saw this one
-			t := e.Thread()
-			if _, ok := threads[t]; !ok {
-				threads[t] = ptrace.AddThread(0, int32(t), "Thread")
 			}
 
 			gID := int64(e.StateTransition().Resource.Goroutine())
@@ -88,6 +85,10 @@ func main() {
 				continue
 			}
 
+			// If we're going to Runnable, collect the starting stack
+			// so we can use the Func in the last Frame to display the
+			// goroutine starting function when, later, it goes to
+			// Running and we'll start a slice for it.
 			if to == trace.GoRunnable {
 				stack := e.StateTransition().Stack.Frames()
 				var sf trace.StackFrame
@@ -97,6 +98,8 @@ func main() {
 				}
 			}
 
+			// If we're going to Running, start a running goroutine
+			// slice. Otherwise, close it.
 			if to == trace.GoRunning {
 				if _, ok := running[gID]; !ok {
 					running[gID] = true
@@ -108,7 +111,6 @@ func main() {
 					fmt.Printf("> closed running slice for %v \n", gID)
 					ptrace.AddEvent(threads[t].EndSlice(uint64(e.Time())))
 					delete(running, gID)
-					//delete(stacks, gID)
 				}
 			}
 		}
