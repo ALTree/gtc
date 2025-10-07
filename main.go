@@ -10,8 +10,7 @@ import (
 )
 
 func main() {
-
-	file, err := os.Open("trace2.out")
+	file, err := os.Open(os.Args[1])
 	if err != nil {
 		panic(err)
 	}
