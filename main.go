@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"slices"
@@ -18,7 +19,13 @@ func EmitMetric(tr perfetto.Trace, e trace.Event) {
 }
 
 func main() {
-	file, err := os.Open(os.Args[1])
+
+	verbose := flag.Bool("v", false, "Run in verbose mode")
+	startTS := flag.Uint64("s", 0, "Start timestamp for verbose prints")
+	endTS := flag.Uint64("e", 1<<63, "End timestamp for verbose prints")
+	flag.Parse()
+
+	file, err := os.Open(flag.Args()[0])
 	if err != nil {
 		panic(err)
 	}
@@ -26,7 +33,6 @@ func main() {
 
 	pt := perfetto.Trace{TID: 42}
 	p := pt.AddProcess(0, "Process")
-	metrics := make(map[string]perfetto.Counter)
 	running := make(map[int64]bool)
 	stacks := make(map[int64]string)
 	activeRanges := make(map[int64]string)
@@ -34,46 +40,46 @@ func main() {
 	var e trace.Event
 	for err == nil {
 		e, err = tr.ReadEvent()
-		if len(os.Args) > 2 && os.Args[2] == "-v" {
-			fmt.Println("|", e)
+		ts := uint64(e.Time())
+		if *verbose {
+			if ts >= *startTS && ts <= *endTS {
+				fmt.Println("|", e)
+			}
 		}
 
-		// Extract the thread, and add a new Thread to the trace if we
-		// never saw this one
 		t := int32(e.Thread())
-
 		if _, ok := pt.Threads[t]; !ok {
 			pt.AddThread(0, t, "Tread")
 		}
 
-		switch e.Kind() {
+		switch k := e.Kind(); k {
 		case trace.EventMetric:
 			name := e.Metric().Name
-			if _, ok := metrics[name]; !ok {
-				metrics[name] = pt.AddCounter(name, "")
+			if _, ok := pt.Counters[name]; !ok {
+				pt.AddCounter(name, "")
 			}
-			pt.AddEvent(metrics[name].NewValue(uint64(e.Time()), int64(e.Metric().Value.Uint64())))
+			pt.AddEvent(pt.Counters[name].NewValue(ts, int64(e.Metric().Value.Uint64())))
 		case trace.EventRangeBegin, trace.EventRangeEnd:
 			r := e.Range()
-			if k := e.Kind(); k == trace.EventRangeBegin {
+			if k == trace.EventRangeBegin {
 				if r.Scope.Kind == trace.ResourceNone {
-					pt.AddEvent(p.StartSlice(uint64(e.Time()), r.Name))
+					pt.AddEvent(p.StartSlice(ts, r.Name))
 				} else {
 					if s := e.Range().Scope; s.Kind == trace.ResourceGoroutine {
 						gID := int64(e.Range().Scope.Goroutine())
 						activeRanges[gID] = r.Name
 					}
-					pt.AddEvent(pt.Threads[t].StartSlice(uint64(e.Time()), r.Name))
+					pt.AddEvent(pt.Threads[t].StartSlice(ts, r.Name))
 				}
 			} else {
 				if r.Scope.Kind == trace.ResourceNone {
-					pt.AddEvent(p.EndSlice(uint64(e.Time())))
+					pt.AddEvent(p.EndSlice(ts))
 				} else {
 					if s := e.Range().Scope; s.Kind == trace.ResourceGoroutine {
 						gID := int64(e.Range().Scope.Goroutine())
 						activeRanges[gID] = ""
 					}
-					pt.AddEvent(pt.Threads[t].EndSlice(uint64(e.Time())))
+					pt.AddEvent(pt.Threads[t].EndSlice(ts))
 				}
 			}
 		case trace.EventStateTransition:
@@ -84,14 +90,14 @@ func main() {
 			gID := int64(e.StateTransition().Resource.Goroutine())
 			from, to := e.StateTransition().Goroutine()
 
-			// if we're coming from Syscall, close syscall slice
+			// if we're coming from the Syscall state, close syscall slice
 			if from == trace.GoSyscall {
-				pt.AddEvent(pt.Threads[t].EndSlice(uint64(e.Time())))
+				pt.AddEvent(pt.Threads[t].EndSlice(ts))
 			}
 
-			// if we're going to Syscall, open a syscall slice
+			// if we're going to the Syscall state, open a syscall slice
 			if to == trace.GoSyscall {
-				pt.AddEvent(pt.Threads[t].StartSlice(uint64(e.Time()), "syscall"))
+				pt.AddEvent(pt.Threads[t].StartSlice(ts, "syscall"))
 				// we continue because we opened the slice related to
 				// the 'to' parameter, and the 'from' is irrelevant
 				// (we're coming from running, but we don't need to
@@ -107,9 +113,8 @@ func main() {
 			// Running and we'll start a slice for it.
 			if to == trace.GoRunnable {
 				stack := e.StateTransition().Stack.Frames()
-				var sf trace.StackFrame
 				if sc := slices.Collect(stack); len(sc) > 0 {
-					sf = sc[len(sc)-1]
+					sf := sc[len(sc)-1]
 					stacks[gID] = sf.Func
 				}
 			}
@@ -118,19 +123,18 @@ func main() {
 			// slice. Otherwise, close it.
 			if to == trace.GoRunning {
 				if _, ok := running[gID]; !ok {
-					running[gID] = true
-					pt.AddEvent(pt.Threads[t].StartSlice(uint64(e.Time()), fmt.Sprintf("G%v (%v)", gID, stacks[gID])))
+					pt.AddEvent(pt.Threads[t].StartSlice(ts, fmt.Sprintf("G%v (%v)", gID, stacks[gID])))
 					if ar, ok := activeRanges[gID]; ok && ar != "" {
-						pt.AddEvent(pt.Threads[t].StartSlice(uint64(e.Time()), ar))
+						pt.AddEvent(pt.Threads[t].StartSlice(ts, ar))
 					}
+					running[gID] = true
 				}
 			} else {
 				if _, ok := running[gID]; ok {
 					if ar, ok := activeRanges[gID]; ok && ar != "" {
-						pt.AddEvent(pt.Threads[t].EndSlice(uint64(e.Time())))
+						pt.AddEvent(pt.Threads[t].EndSlice(ts))
 					}
-
-					pt.AddEvent(pt.Threads[t].EndSlice(uint64(e.Time())))
+					pt.AddEvent(pt.Threads[t].EndSlice(ts))
 					delete(running, gID)
 				}
 			}
