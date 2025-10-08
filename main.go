@@ -128,7 +128,11 @@ func main() {
 			// slice. Otherwise, close it.
 			if to == trace.GoRunning {
 				if _, ok := running[gID]; !ok {
-					pt.AddEvent(pt.Threads[t].StartSlice(ts, fmt.Sprintf("G%v (%v)", gID, stacks[gID])))
+					var gfunc string
+					if s, ok := stacks[gID]; ok && s != "" {
+						gfunc = " (" + s + ")"
+					}
+					pt.AddEvent(pt.Threads[t].StartSlice(ts, fmt.Sprintf("G%v%v", gID, gfunc)))
 					if ar, ok := activeRanges[gID]; ok && ar != "" {
 						pt.AddEvent(pt.Threads[t].StartSlice(ts, ar))
 					}
@@ -145,9 +149,7 @@ func main() {
 			}
 		case trace.EventSync:
 		case trace.EventLabel:
-			//fmt.Printf("Unprocessed label: %v\n", e)
 		default:
-			fmt.Println(e)
 		}
 	}
 
