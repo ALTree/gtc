@@ -23,6 +23,7 @@ func main() {
 	verbose := flag.Bool("v", false, "Run in verbose mode")
 	startTS := flag.Uint64("s", 0, "Start timestamp for verbose prints")
 	endTS := flag.Uint64("e", 1<<63, "End timestamp for verbose prints")
+	kind := flag.String("kind", "thread", "Trace kind (thread or proc)")
 	flag.Parse()
 
 	file, err := os.Open(flag.Args()[0])
@@ -49,7 +50,7 @@ func main() {
 
 		t := int32(e.Thread())
 		if _, ok := pt.Threads[t]; !ok {
-			pt.AddThread(0, t, "Tread")
+			pt.AddThread(0, t, "Thread")
 		}
 
 		switch k := e.Kind(); k {
@@ -83,11 +84,14 @@ func main() {
 				}
 			}
 		case trace.EventStateTransition:
-			if e.StateTransition().Resource.Kind != trace.ResourceGoroutine {
+			var gID int64
+			k := e.StateTransition().Resource.Kind
+			if *kind == "thread" && k == trace.ResourceGoroutine {
+				gID = int64(e.StateTransition().Resource.Goroutine())
+			} else {
 				continue
 			}
 
-			gID := int64(e.StateTransition().Resource.Goroutine())
 			from, to := e.StateTransition().Goroutine()
 
 			// if we're coming from the Syscall state, close syscall slice
@@ -98,12 +102,6 @@ func main() {
 			// if we're going to the Syscall state, open a syscall slice
 			if to == trace.GoSyscall {
 				pt.AddEvent(pt.Threads[t].StartSlice(ts, "syscall"))
-				// we continue because we opened the slice related to
-				// the 'to' parameter, and the 'from' is irrelevant
-				// (we're coming from running, but we don't need to
-				// close the corresponding running slice when a
-				// syscall starts because syscall is considered a
-				// running state).
 				continue
 			}
 
@@ -138,6 +136,11 @@ func main() {
 					delete(running, gID)
 				}
 			}
+		case trace.EventSync:
+		case trace.EventLabel:
+			//fmt.Printf("Unprocessed label: %v\n", e)
+		default:
+			fmt.Println(e)
 		}
 	}
 
