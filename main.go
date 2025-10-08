@@ -114,6 +114,13 @@ func main() {
 				if sc := slices.Collect(stack); len(sc) > 0 {
 					sf := sc[len(sc)-1]
 					stacks[gID] = sf.Func
+				} else {
+					// try to collect stack from the Event
+					stack := e.Stack().Frames()
+					if sc := slices.Collect(stack); len(sc) > 0 {
+						sf := sc[len(sc)-1]
+						stacks[gID] = sf.Func
+					}
 				}
 			}
 
