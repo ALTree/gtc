@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 
 	"github.com/ALTree/perfetto"
 	"golang.org/x/exp/trace"
@@ -35,7 +36,7 @@ func main() {
 	pt := perfetto.Trace{TID: 42}
 	p := pt.AddProcess(0, "Process")
 	running := make(map[int64]bool)
-	stacks := make(map[int64]string)
+	stacks := make(map[int64][]trace.StackFrame)
 	activeRanges := make(map[int64]string)
 
 	var e trace.Event
@@ -110,16 +111,13 @@ func main() {
 			// goroutine starting function when, later, it goes to
 			// Running and we'll start a slice for it.
 			if to == trace.GoRunnable {
-				stack := e.StateTransition().Stack.Frames()
-				if sc := slices.Collect(stack); len(sc) > 0 {
-					sf := sc[len(sc)-1]
-					stacks[gID] = sf.Func
-				} else {
-					// try to collect stack from the Event
-					stack := e.Stack().Frames()
-					if sc := slices.Collect(stack); len(sc) > 0 {
-						sf := sc[len(sc)-1]
-						stacks[gID] = sf.Func
+				stack := slices.Collect(e.StateTransition().Stack.Frames())
+				if len(stack) > 0 {
+					stacks[gID] = stack
+				} else { // try to collect stack from the Event
+					stack := slices.Collect(e.Stack().Frames())
+					if len(stack) > 0 {
+						stacks[gID] = stack
 					}
 				}
 			}
@@ -129,10 +127,13 @@ func main() {
 			if to == trace.GoRunning {
 				if _, ok := running[gID]; !ok {
 					var gfunc string
-					if s, ok := stacks[gID]; ok && s != "" {
-						gfunc = " (" + s + ")"
+					if stack, ok := stacks[gID]; ok {
+						if s := stack[len(stack)-1].Func; s != "" {
+							gfunc = " (" + s + ")"
+						}
 					}
-					pt.AddEvent(pt.Threads[t].StartSlice(ts, fmt.Sprintf("G%v%v", gID, gfunc)))
+
+					pt.AddEvent(pt.Threads[t].StartSlice(ts, fmt.Sprintf("G%v%v", gID, gfunc), StackToAnnotations(stacks[gID])))
 					if ar, ok := activeRanges[gID]; ok && ar != "" {
 						pt.AddEvent(pt.Threads[t].StartSlice(ts, ar))
 					}
@@ -163,5 +164,15 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
+}
 
+func StackToAnnotations(arr []trace.StackFrame) perfetto.Annotations {
+	var res perfetto.Annotations
+	for i, v := range arr {
+		res = append(res, perfetto.KV{
+			strconv.Itoa(i),
+			v.Func + ":" + strconv.Itoa(int(v.Line)),
+		})
+	}
+	return res
 }
