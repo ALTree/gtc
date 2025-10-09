@@ -102,7 +102,8 @@ func main() {
 
 			// if we're going to the Syscall state, open a syscall slice
 			if to == trace.GoSyscall {
-				pt.AddEvent(pt.Threads[t].StartSlice(ts, "syscall"))
+				stack := slices.Collect(e.Stack().Frames())
+				pt.AddEvent(pt.Threads[t].StartSlice(ts, "syscall", StackToAnnotations(stack)))
 				continue
 			}
 
@@ -133,7 +134,8 @@ func main() {
 						}
 					}
 
-					pt.AddEvent(pt.Threads[t].StartSlice(ts, fmt.Sprintf("G%v%v", gID, gfunc), StackToAnnotations(stacks[gID])))
+					//pt.AddEvent(pt.Threads[t].StartSlice(ts, fmt.Sprintf("G%v%v", gID, gfunc), StackToAnnotations(stacks[gID])))
+					pt.AddEvent(pt.Threads[t].StartSlice(ts, fmt.Sprintf("G%v%v", gID, gfunc)))
 					if ar, ok := activeRanges[gID]; ok && ar != "" {
 						pt.AddEvent(pt.Threads[t].StartSlice(ts, ar))
 					}
