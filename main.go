@@ -21,9 +21,6 @@ func EmitMetric(tr perfetto.Trace, e trace.Event) {
 
 func main() {
 
-	verbose := flag.Bool("v", false, "Run in verbose mode")
-	startTS := flag.Uint64("s", 0, "Start timestamp for verbose prints")
-	endTS := flag.Uint64("e", 1<<63, "End timestamp for verbose prints")
 	kind := flag.String("kind", "thread", "Trace kind (thread or proc)")
 	flag.Parse()
 
@@ -56,11 +53,6 @@ func main() {
 
 		e, err = tr.ReadEvent()
 		ts := uint64(e.Time())
-		if *verbose {
-			if ts >= *startTS && ts <= *endTS {
-				fmt.Println("|", e)
-			}
-		}
 
 		t := int32(e.Thread())
 		if _, ok := pt.Threads[t]; !ok {
