@@ -31,16 +31,29 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	outfile, err := os.Create("trace.proto")
+	if err != nil {
+		panic(err)
+	}
+
 	tr, _ := trace.NewReader(file)
 
-	pt := perfetto.Trace{TID: 42}
+	pt := perfetto.NewTrace(42)
 	p := pt.AddProcess(0, "Process")
 	running := make(map[int64]bool)
 	stacks := make(map[int64][]trace.StackFrame)
 	activeRanges := make(map[int64]string)
-
+	var cnt int
 	var e trace.Event
 	for err == nil {
+		cnt++
+		if cnt == 10000 {
+			WriteFile(&pt, outfile)
+			pt.Reset()
+			cnt = 0
+		}
+
 		e, err = tr.ReadEvent()
 		ts := uint64(e.Time())
 		if *verbose {
@@ -156,16 +169,22 @@ func main() {
 		}
 	}
 
-	data, err := pt.Marshal()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
+	WriteFile(&pt, outfile)
+	outfile.Close()
 
-	err = os.WriteFile("trace.proto", data, 0666)
-	if err != nil {
-		fmt.Println(err)
-	}
+	// ---- memprofile -----------------------------------
+	/*
+		f, err := os.Create("mem.prof")
+		if err != nil {
+			fmt.Println(err)
+			return
+
+		}
+		pprof.WriteHeapProfile(f)
+		f.Close()
+	*/
+	// ---------------------------------------------------
+
 }
 
 func StackToAnnotations(arr []trace.StackFrame) perfetto.Annotations {
@@ -177,4 +196,17 @@ func StackToAnnotations(arr []trace.StackFrame) perfetto.Annotations {
 		})
 	}
 	return res
+}
+
+func WriteFile(pt *perfetto.Trace, f *os.File) {
+	data, err := pt.Marshal()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	_, err = f.Write(data)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 }
