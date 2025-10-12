@@ -1,54 +1,52 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
+	"path"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/ALTree/perfetto"
 	"golang.org/x/exp/trace"
 )
 
-type Converter struct {
-	Trace perfetto.Trace
-}
-
-func EmitMetric(tr perfetto.Trace, e trace.Event) {
-
+type Stats struct {
+	Total   int
+	Skipped int
 }
 
 func main() {
 
-	kind := flag.String("kind", "thread", "Trace kind (thread or proc)")
-	flag.Parse()
-
-	file, err := os.Open(flag.Args()[0])
+	file, err := os.Open(os.Args[1])
 	if err != nil {
 		panic(err)
 	}
 
-	outfile, err := os.Create("trace.proto")
+	ext := path.Ext(os.Args[1])
+	outfile, err := os.Create(strings.Replace(os.Args[1], ext, ".proto", 1))
 	if err != nil {
 		panic(err)
 	}
 
+	var stats Stats
 	tr, _ := trace.NewReader(file)
 
-	pt := perfetto.NewTrace(42)
-	p := pt.AddProcess(0, "Process")
+	pt := perfetto.NewTrace()
+	pt.AddProcess(0, "Process")
+	glb := perfetto.GlobalTrack()
+
 	running := make(map[int64]bool)
 	stacks := make(map[int64][]trace.StackFrame)
 	activeRanges := make(map[int64]string)
-	var cnt int
+
 	var e trace.Event
 	for err == nil {
-		cnt++
-		if cnt == 10000 {
+		stats.Total++
+		if stats.Total%10000 == 0 {
 			WriteFile(&pt, outfile)
 			pt.Reset()
-			cnt = 0
 		}
 
 		e, err = tr.ReadEvent()
@@ -65,34 +63,34 @@ func main() {
 			if _, ok := pt.Counters[name]; !ok {
 				pt.AddCounter(name, "")
 			}
-			pt.AddEvent(pt.Counters[name].NewValue(ts, int64(e.Metric().Value.Uint64())))
+			pt.NewValue(pt.Counters[name], ts, int64(e.Metric().Value.Uint64()))
 		case trace.EventRangeBegin, trace.EventRangeEnd:
 			r := e.Range()
 			if k == trace.EventRangeBegin {
 				if r.Scope.Kind == trace.ResourceNone {
-					pt.AddEvent(p.StartSlice(ts, r.Name))
+					pt.StartSlice(glb, ts, r.Name)
 				} else {
 					if s := e.Range().Scope; s.Kind == trace.ResourceGoroutine {
 						gID := int64(e.Range().Scope.Goroutine())
 						activeRanges[gID] = r.Name
 					}
-					pt.AddEvent(pt.Threads[t].StartSlice(ts, r.Name))
+					pt.StartSlice(pt.Threads[t], ts, r.Name)
 				}
 			} else {
 				if r.Scope.Kind == trace.ResourceNone {
-					pt.AddEvent(p.EndSlice(ts))
+					pt.EndSlice(glb, ts)
 				} else {
 					if s := e.Range().Scope; s.Kind == trace.ResourceGoroutine {
 						gID := int64(e.Range().Scope.Goroutine())
 						activeRanges[gID] = ""
 					}
-					pt.AddEvent(pt.Threads[t].EndSlice(ts))
+					pt.EndSlice(pt.Threads[t], ts)
 				}
 			}
 		case trace.EventStateTransition:
 			var gID int64
 			k := e.StateTransition().Resource.Kind
-			if *kind == "thread" && k == trace.ResourceGoroutine {
+			if k == trace.ResourceGoroutine {
 				gID = int64(e.StateTransition().Resource.Goroutine())
 			} else {
 				continue
@@ -102,13 +100,13 @@ func main() {
 
 			// if we're coming from the Syscall state, close syscall slice
 			if from == trace.GoSyscall {
-				pt.AddEvent(pt.Threads[t].EndSlice(ts))
+				pt.EndSlice(pt.Threads[t], ts)
 			}
 
 			// if we're going to the Syscall state, open a syscall slice
 			if to == trace.GoSyscall {
 				stack := slices.Collect(e.Stack().Frames())
-				pt.AddEvent(pt.Threads[t].StartSlice(ts, "syscall", StackToAnnotations(stack)))
+				pt.StartSlice(pt.Threads[t], ts, "syscall", StackToAnnotations(stack))
 				continue
 			}
 
@@ -140,43 +138,31 @@ func main() {
 					}
 
 					//pt.AddEvent(pt.Threads[t].StartSlice(ts, fmt.Sprintf("G%v%v", gID, gfunc), StackToAnnotations(stacks[gID])))
-					pt.AddEvent(pt.Threads[t].StartSlice(ts, fmt.Sprintf("G%v%v", gID, gfunc)))
+					pt.StartSlice(pt.Threads[t], ts, fmt.Sprintf("G%v%v", gID, gfunc))
 					if ar, ok := activeRanges[gID]; ok && ar != "" {
-						pt.AddEvent(pt.Threads[t].StartSlice(ts, ar))
+						pt.StartSlice(pt.Threads[t], ts, ar)
 					}
 					running[gID] = true
 				}
 			} else {
 				if _, ok := running[gID]; ok {
 					if ar, ok := activeRanges[gID]; ok && ar != "" {
-						pt.AddEvent(pt.Threads[t].EndSlice(ts))
+						pt.EndSlice(pt.Threads[t], ts)
 					}
-					pt.AddEvent(pt.Threads[t].EndSlice(ts))
+					pt.EndSlice(pt.Threads[t], ts)
 					delete(running, gID)
 				}
 			}
-		case trace.EventSync:
-		case trace.EventLabel:
 		default:
+			stats.Skipped++
 		}
 	}
 
 	WriteFile(&pt, outfile)
 	outfile.Close()
-
-	// ---- memprofile -----------------------------------
-	/*
-		f, err := os.Create("mem.prof")
-		if err != nil {
-			fmt.Println(err)
-			return
-
-		}
-		pprof.WriteHeapProfile(f)
-		f.Close()
-	*/
-	// ---------------------------------------------------
-
+	fmt.Printf("Written %v\n", outfile.Name())
+	fmt.Printf("Events: \t%v\nProcessed:\t%v\nSkipped: \t%v\n",
+		stats.Total, stats.Total-stats.Skipped, stats.Skipped)
 }
 
 func StackToAnnotations(arr []trace.StackFrame) perfetto.Annotations {
