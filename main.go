@@ -118,12 +118,12 @@ func main() {
 				stack := slices.Collect(e.StateTransition().Stack.Frames())
 				if len(stack) > 0 {
 					stacks[gID] = stack
-				} else { // try to collect stack from the Event
+				} /*else { // try to collect stack from the Event
 					stack := slices.Collect(e.Stack().Frames())
 					if len(stack) > 0 {
 						stacks[gID] = stack
 					}
-				}
+				}*/
 			}
 
 			// If we're going to Running, start a running goroutine
@@ -137,7 +137,6 @@ func main() {
 						}
 					}
 
-					//pt.AddEvent(pt.Threads[t].StartSlice(ts, fmt.Sprintf("G%v%v", gID, gfunc), StackToAnnotations(stacks[gID])))
 					pt.StartSlice(pt.Threads[t], ts, fmt.Sprintf("G%v%v", gID, gfunc))
 					if ar, ok := activeRanges[gID]; ok && ar != "" {
 						pt.StartSlice(pt.Threads[t], ts, ar)
